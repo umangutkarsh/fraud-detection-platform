@@ -3,6 +3,8 @@ package contract
 import (
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -46,6 +48,19 @@ func invalid(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalidTransaction, fmt.Sprintf(format, args...))
 }
 
+// Normalise tidies harmless client variations (case, whitespace) and defaults
+// the timestamp.
+func (t *Transaction) Normalise(now time.Time) {
+	t.ID = strings.TrimSpace(t.ID)
+	t.UserID = strings.TrimSpace(t.UserID)
+	t.Currency = strings.ToUpper(strings.TrimSpace(t.Currency))
+	t.Country = strings.ToUpper(strings.TrimSpace(t.Country))
+	if t.Timestamp.IsZero() {
+		t.Timestamp = now
+	}
+	t.Timestamp = t.Timestamp.UTC()
+}
+
 // To enforce event contract at both boundaries
 func (t Transaction) Validate(now time.Time) error {
 	switch {
@@ -68,3 +83,10 @@ func (t Transaction) Validate(now time.Time) error {
 	}
 	return nil
 }
+
+// ScopedID identifies a transaction within a merchant.
+func ScopedID(merchantID, id string) string {
+	return strconv.Itoa(len(merchantID)) + ":" + merchantID + ":" + id
+}
+
+func (t Transaction) ScopedIDValue() string { return ScopedID(t.MerchantID, t.ID) }
