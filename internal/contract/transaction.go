@@ -90,3 +90,9 @@ func ScopedID(merchantID, id string) string {
 }
 
 func (t Transaction) ScopedIDValue() string { return ScopedID(t.MerchantID, t.ID) }
+
+// Redis key layout shared by both services (gateway and processor).
+// "decision": is the contract between gateway and processor.”
+func IdempotencyKey(merchantID, id string) string { return "idem:" + ScopedID(merchantID, id) }
+func DecisionKey(merchantID, id string) string    { return "decision:" + ScopedID(merchantID, id) }
+func ReceiptKey(merchantID, id string) string     { return "receipt:" + ScopedID(merchantID, id) }
