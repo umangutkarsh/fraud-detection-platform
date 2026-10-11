@@ -9,6 +9,9 @@ import (
 )
 
 const (
+	DecisionApproved    = "approved"
+	DecisionQuarantined = "quarantined"
+
 	maxIDLength   = 128
 	maxFutureSkew = 5 * time.Minute
 )

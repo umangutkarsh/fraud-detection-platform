@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"fraud-detection-platform/internal/contract"
+	"fraud-detection-platform/internal/processor/metrics"
 	"time"
 )
 
@@ -78,5 +79,18 @@ func (e *Engine) Evaluate(ctx context.Context, txn contract.Transaction) (contra
 		metrics.RuleHits.WithLabelValues(name).Inc()
 	}
 
-	// return &contract.FraudResult{}, nil
+	quarantine := score >= e.threshold
+	decision := contract.DecisionApproved
+	if quarantine {
+		decision = contract.DecisionQuarantined
+	}
+
+	return contract.FraudResult{
+		Transaction:  txn,
+		Decision:     decision,
+		IsFraudulent: quarantine,
+		RiskScore:    score,
+		Reasons:      reasons,
+		EvaluatedAt:  e.now().Local(),
+	}, nil
 }
