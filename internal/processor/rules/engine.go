@@ -42,3 +42,19 @@ func DefaultConfig() Config {
 		QuarantineThreshold:    50,
 	}
 }
+
+type Engine struct {
+	rules     []Rule
+	threshold int
+	now       func() time.Time
+}
+
+func NewEngine(threshold int, rules ...Rule) *Engine {
+	return &Engine{rules: rules, threshold: threshold, now: time.Now}
+}
+
+func (e *Engine) Evaluate(ctx context.Context, txn contract.Transaction) (contract.FraudResult, error) {
+	score := 0
+	reasons := make([]string, 0, len(e.rules))
+	fired := make([]string, 0, len(e.rules))
+}
