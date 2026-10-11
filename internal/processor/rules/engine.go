@@ -2,6 +2,7 @@ package rules
 
 import (
 	"context"
+	"fmt"
 	"fraud-detection-platform/internal/contract"
 	"time"
 )
@@ -57,4 +58,25 @@ func (e *Engine) Evaluate(ctx context.Context, txn contract.Transaction) (contra
 	score := 0
 	reasons := make([]string, 0, len(e.rules))
 	fired := make([]string, 0, len(e.rules))
+
+	for _, r := range e.rules {
+		hit, err := r.Evaluate(ctx, txn)
+		if err != nil {
+			return contract.FraudResult{}, fmt.Errorf("rule %s: %w", r.Name(), err)
+		}
+		if hit == nil {
+			continue
+		}
+
+		score += hit.Score
+		reasons = append(reasons, hit.Reason)
+		fired = append(fired, r.Name())
+	}
+
+	// Count only after every rule succeeded, so retries don't double count.
+	for _, name := range fired {
+		metrics.RuleHits.WithLabelValues(name).Inc()
+	}
+
+	// return &contract.FraudResult{}, nil
 }
