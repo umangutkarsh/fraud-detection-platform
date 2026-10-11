@@ -6,6 +6,8 @@ import (
 	"fraud-detection-platform/internal/contract"
 	"fraud-detection-platform/internal/processor/metrics"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 // Hit is a rule firing.
@@ -30,6 +32,7 @@ type Config struct {
 	AMLWindow              time.Duration
 	CrossBorderMaxTxns     int
 	CrossBorderMinGBPMinor int64
+	VelocityBaseScore      int
 	QuarantineThreshold    int
 	CrossBorderRiskScore   int `json:"cross_border_risk_score" yaml:"cross_border_risk_score"`
 }
@@ -55,6 +58,15 @@ type Engine struct {
 
 func NewEngine(threshold int, rules ...Rule) *Engine {
 	return &Engine{rules: rules, threshold: threshold, now: time.Now}
+}
+
+// NewDefaultEngine wires the standard rule set onto a Redis client.
+func NewDefaultEngine(rdb redis.Cmdable, fx Converter, cfg Config) *Engine {
+	return NewEngine(cfg.QuarantineThreshold,
+		NewHighValue(fx, cfg.HighValueGBPMinor, cfg.CrossBorderRiskScore),
+		NewVelocity(rdb, cfg.VelocityWindow, cfg.VelocityBaseScore),
+		NewCrossBorder(rdb, fx, cfg),
+	)
 }
 
 func (e *Engine) Evaluate(ctx context.Context, txn contract.Transaction) (contract.FraudResult, error) {
