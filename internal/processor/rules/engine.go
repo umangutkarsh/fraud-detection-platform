@@ -31,6 +31,7 @@ type Config struct {
 	CrossBorderMaxTxns     int
 	CrossBorderMinGBPMinor int64
 	QuarantineThreshold    int
+	CrossBorderRiskScore   int `json:"cross_border_risk_score" yaml:"cross_border_risk_score"`
 }
 
 func DefaultConfig() Config {
@@ -42,6 +43,7 @@ func DefaultConfig() Config {
 		CrossBorderMaxTxns:     5,
 		CrossBorderMinGBPMinor: 10_000_00,
 		QuarantineThreshold:    50,
+		CrossBorderRiskScore:   60,
 	}
 }
 
