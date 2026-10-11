@@ -6,108 +6,100 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
-type partitionOffsets struct {
-	order      []int64                 // fetched offsets not yet committable, ascending
-	done       map[int64]kafka.Message // completed out of order, waiting for the head
-	ready      *kafka.Message          // highest contiguous completed message, awaiting commit
+type PartitionOffsets struct {
+	order      []int64
+	done       map[int64]kafka.Message
+	ready      *kafka.Message
 	maxTracked int64
 }
 
-type offsetTracker struct {
+type OffsetTracker struct {
 	mu      sync.Mutex
-	parts   map[int]*partitionOffsets
+	parts   map[int]*PartitionOffsets
 	pending int
 }
 
-func newOffsetTracker() *offsetTracker {
-	return &offsetTracker{parts: make(map[int]*partitionOffsets)}
+func NewOffesetTracker() *OffsetTracker {
+	return &OffsetTracker{parts: make(map[int]*PartitionOffsets)}
 }
 
-// Track registers a fetched message. It must be called before the message is
-// handed to a worker.
-func (t *offsetTracker) Track(m kafka.Message) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+func (tracker *OffsetTracker) Track(message *kafka.Message) {
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
 
-	ps := t.parts[m.Partition]
-	if ps == nil {
-		ps = &partitionOffsets{done: make(map[int64]kafka.Message), maxTracked: -1}
-		t.parts[m.Partition] = ps
+	partitionOffset := tracker.parts[message.Partition]
+	if partitionOffset == nil {
+		partitionOffset = &PartitionOffsets{done: make(map[int64]kafka.Message), maxTracked: -1}
 	}
-	// An offset at or below one we have already seen means the partition was
-	// revoked and re-assigned and the reader rewound to the committed position.
-	// Drop stale state; redelivered messages are covered by the idempotency guard.
-	if m.Offset <= ps.maxTracked {
-		t.pending -= len(ps.order)
-		ps.order = nil
-		ps.done = make(map[int64]kafka.Message)
+
+	if message.Offset <= partitionOffset.maxTracked {
+		tracker.pending -= len(partitionOffset.order)
+		partitionOffset.order = nil
+		partitionOffset.done = make(map[int64]kafka.Message)
 	}
-	ps.maxTracked = m.Offset
-	ps.order = append(ps.order, m.Offset)
-	t.pending++
+	partitionOffset.maxTracked = message.Offset
+	partitionOffset.order = append(partitionOffset.order, partitionOffset.maxTracked)
+	tracker.pending++
 }
 
-// Complete marks a message fully handled and advances the commit point if it
-// unblocks a contiguous run.
-func (t *offsetTracker) Complete(m kafka.Message) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+func (tracker *OffsetTracker) Complete(message *kafka.Message) {
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
 
-	ps := t.parts[m.Partition]
-	if ps == nil || len(ps.order) == 0 || m.Offset < ps.order[0] {
-		return // unknown or already committed
+	partitionOffset := tracker.parts[message.Partition]
+	if partitionOffset == nil || len(partitionOffset.order) == 0 || message.Offset < partitionOffset.order[0] {
+		return
 	}
-	ps.done[m.Offset] = m
 
-	for len(ps.order) > 0 {
-		head := ps.order[0]
-		msg, ok := ps.done[head]
+	partitionOffset.done[message.Offset] = *message
+
+	for len(partitionOffset.order) > 0 {
+		head := partitionOffset.order[0]
+		message, ok := partitionOffset.done[head]
 		if !ok {
 			break
 		}
-		delete(ps.done, head)
-		ps.order = ps.order[1:]
-		t.pending--
-		cp := msg
-		ps.ready = &cp
+		delete(partitionOffset.done, head)
+		partitionOffset.order = partitionOffset.order[1:]
+		tracker.pending--
+		cp := message
+		partitionOffset.ready = &cp
 	}
 }
 
-// Drain returns one message per partition whose offset is safe to commit.
-func (t *offsetTracker) Drain() []kafka.Message {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+func (tracker *OffsetTracker) Drain() []kafka.Message {
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
 
 	var out []kafka.Message
-	for _, ps := range t.parts {
-		if ps.ready != nil {
-			out = append(out, *ps.ready)
-			ps.ready = nil
+	for _, partitionOffset := range tracker.parts {
+		if partitionOffset.ready != nil {
+			out = append(out, *partitionOffset.ready)
+			partitionOffset.ready = nil
 		}
 	}
 	return out
 }
 
-// Restore puts back commits that failed so the next tick retries them.
-func (t *offsetTracker) Restore(msgs []kafka.Message) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+func (tracker *OffsetTracker) Restore(messages []kafka.Message) {
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
 
-	for _, m := range msgs {
-		ps := t.parts[m.Partition]
-		if ps == nil {
+	for _, message := range messages {
+		partitionOffset := tracker.parts[message.Partition]
+		if partitionOffset == nil {
 			continue
 		}
-		if ps.ready == nil || m.Offset > ps.ready.Offset {
-			cp := m
-			ps.ready = &cp
+		if partitionOffset.ready == nil || message.Offset > partitionOffset.ready.Offset {
+			cp := message
+			partitionOffset.ready = &cp
 		}
 	}
 }
 
-// Pending is the number of fetched messages not yet committable.
-func (t *offsetTracker) Pending() int {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.pending
+func (tracker *OffsetTracker) Pending() int {
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+
+	return tracker.pending
 }
