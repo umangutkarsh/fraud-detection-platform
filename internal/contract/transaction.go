@@ -12,6 +12,8 @@ const (
 	DecisionApproved    = "approved"
 	DecisionQuarantined = "quarantined"
 
+	SchemaVersion = "1"
+
 	maxIDLength   = 128
 	maxFutureSkew = 5 * time.Minute
 )
