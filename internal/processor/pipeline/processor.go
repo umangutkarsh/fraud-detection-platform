@@ -1,0 +1,133 @@
+package pipeline
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"fraud-detection-platform/internal/contract"
+	"fraud-detection-platform/internal/processor/metrics"
+	"log/slog"
+	"math/rand/v2"
+	"time"
+
+	"github.com/segmentio/kafka-go"
+)
+
+type Evaluator interface {
+	Evaluate(ctx context.Context, transaction contract.Transaction) (contract.FraudResult, error)
+}
+
+var errBusy = errors.New("Transaction is already being processed by another worker")
+
+type RetryPolicy struct {
+	MaxAttempts int
+	Base, Max   time.Duration
+}
+
+func (policy RetryPolicy) Backoff(attempts int) time.Duration {
+	duration := policy.Base << min(attempts-1, 16)
+	if duration > policy.Max || duration <= 0 {
+		duration = policy.Max
+	}
+	return time.Duration(rand.Int64N(int64(duration)) + 1)
+}
+
+func Sleep(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+type Processor struct {
+	Eval  Evaluator
+	Store DecisionStore
+
+	Retry RetryPolicy
+	Log   *slog.Logger
+
+	Idemp     *Idempotency
+	Publisher *KafkaPublisher
+}
+
+func (processor *Processor) Process(ctx context.Context, message kafka.Message) (err error) {
+	defer func() {
+		if recoverErr := recover(); recoverErr != nil {
+			processor.Log.Error("panic while processing message", "panic", fmt.Sprint(recoverErr),
+				"partition", message.Partition, "offset", message.Offset)
+			err = processor.deadLetter(ctx, message, "panic", fmt.Errorf("panic: %v", recoverErr))
+		}
+	}()
+
+	start := time.Now()
+
+	var txn contract.Transaction
+	if err := json.Unmarshal(message.Value, &txn); err != nil {
+		processor.Log.Error("failed to unmarshal transaction", "error", err, "partition", message.Partition, "offset", message.Offset)
+		return processor.deadLetter(ctx, message, "unmarshal", fmt.Errorf("unmarshal: %w", err))
+	}
+	if err := txn.Validate(time.Now()); err != nil {
+		processor.Log.Error("invalid transaction", "error", err, "partition", message.Partition, "offset", message.Offset)
+		return processor.deadLetter(ctx, message, "validate", fmt.Errorf("validate: %w", err))
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= processor.Retry.MaxAttempts; attempt++ {
+		err := processor.attempt(ctx, txn)
+		if err == nil {
+			metrics.ProcessingLatency.Observe(float64(time.Since(start).Seconds()))
+			if message.Time.IsZero() {
+				metrics.EndToEndLatency.Observe(float64(time.Since(message.Time).Seconds()))
+			}
+			return nil
+		}
+
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		if errors.Is(err, contract.ErrInvalidTransaction) {
+			return processor.deadLetter(ctx, message, "validation_failed", err)
+		}
+
+		lastErr = err
+		metrics.Retries.Inc()
+		processor.Log.Warn("transient failure, will retry", "txn_id", txn.ID, "attempt", attempt,
+			"max_attempts", processor.Retry.MaxAttempts, "error", err)
+		if attempt < processor.Retry.MaxAttempts {
+			if err := Sleep(ctx, processor.Retry.Backoff(attempt)); err != nil {
+				return err
+			}
+		}
+	}
+	return processor.deadLetter(ctx, message, "retries_exhaused", lastErr)
+}
+
+func (processor *Processor) attempt(ctx context.Context, txn contract.Transaction) error {
+	return nil
+}
+
+func (processor *Processor) deadLetter(ctx context.Context, message kafka.Message, reason string, cause error) error {
+	for attempt := 1; ; attempt++ {
+		err := processor.Publisher.PublishDLQ(ctx, message, reason, cause)
+		if err == nil {
+			metrics.DeadLettered.WithLabelValues(reason).Inc()
+			processor.Log.Error("message dead-lettered", "reason", reason, "partition", message.Partition,
+				"offset", message.Offset, "cause", cause)
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		processor.Log.Error("dead-letter write failed", "attempt", attempt, "error", err)
+		if err := Sleep(ctx, processor.Retry.Backoff(attempt)); err != nil {
+			return err
+		}
+	}
+}
