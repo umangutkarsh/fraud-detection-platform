@@ -53,7 +53,7 @@ type Processor struct {
 	Log   *slog.Logger
 
 	Idemp     *Idempotency
-	Publisher *KafkaPublisher
+	Publisher PublisherInterface
 }
 
 func (processor *Processor) Process(ctx context.Context, message kafka.Message) (err error) {
