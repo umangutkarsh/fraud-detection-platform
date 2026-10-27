@@ -110,7 +110,48 @@ func (processor *Processor) Process(ctx context.Context, message kafka.Message) 
 }
 
 func (processor *Processor) attempt(ctx context.Context, txn contract.Transaction) error {
+	idempotencyKey := contract.IdempotencyKey(txn.MerchantID, txn.ID)
+	state, err := processor.Idemp.Claim(ctx, idempotencyKey)
+	if err != nil {
+		return err
+	}
+
+	switch state {
+	case claimDone:
+		metrics.Duplicates.Inc()
+		processor.Log.Debug("duplicate skipped", "txn_id", txn.ID)
+		return nil
+
+	case claimBusy:
+		return errBusy
+	}
+
+	result, err := processor.Eval.Evaluate(ctx, txn)
+	if err != nil {
+		processor.release(ctx, idempotencyKey)
+		return err
+	}
+
+	if err := processor.Publisher.PublishDecision(ctx, result); err != nil {
+		processor.release(ctx, idempotencyKey)
+		return err
+	}
+
+	if err := processor.Store.Save(ctx, result); err != nil {
+		processor.release(ctx, idempotencyKey)
+		return err
+	}
+
+	if err := processor.Idemp.MarkDone(ctx, idempotencyKey); err != nil {
+		processor.Log.Error("failed to mark transaction done", "txn_id", txn.ID, "error", err)
+	}
+
+	metrics.Processed.WithLabelValues(result.Decision).Inc()
+	processor.Log.Info("transaction decided", "txn_id", txn.ID, "decision", result.Decision,
+		"risk_score", result.RiskScore, "results", len(result.Reasons))
+
 	return nil
+
 }
 
 func (processor *Processor) deadLetter(ctx context.Context, message kafka.Message, reason string, cause error) error {
