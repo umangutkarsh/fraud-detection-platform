@@ -154,6 +154,12 @@ func (processor *Processor) attempt(ctx context.Context, txn contract.Transactio
 
 }
 
+func (processor *Processor) release(ctx context.Context, key string) {
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	processor.Idemp.Release(releaseCtx, key)
+}
+
 func (processor *Processor) deadLetter(ctx context.Context, message kafka.Message, reason string, cause error) error {
 	for attempt := 1; ; attempt++ {
 		err := processor.Publisher.PublishDLQ(ctx, message, reason, cause)
