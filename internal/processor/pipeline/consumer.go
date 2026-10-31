@@ -105,3 +105,27 @@ func (p *Pipeline) fetchLoop() {
 		}
 	}
 }
+
+func (p *Pipeline) statsLoop() {
+	defer p.auxWG.Done()
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if lag := p.reader.Stats().Lag; lag >= 0 {
+				metrics.ConsumerLag.Set(float64(lag))
+			}
+			depth := 0
+			for _, ch := range p.shards {
+				depth += len(ch)
+			}
+			metrics.WorkerQueueDepth.Set(float64(depth))
+			metrics.UncommittedMessages.Set(float64(p.tracker.Pending()))
+		case <-p.auxStop:
+			return
+		}
+	}
+}
