@@ -202,3 +202,39 @@ func TestStoreFailureIsRetriedSoGatewayNeverSeesPendingForever(t *testing.T) {
 		t.Fatal("one transient failure must not dead-letter the message")
 	}
 }
+
+func TestPoisonMessagesGoToDLQ(t *testing.T) {
+	pub := &FakePublisher{}
+	p, _ := NewTestProcessor(t, pub)
+
+	bad := goodTx("t1")
+	bad.AmountMinor = -5
+	cases := map[string]kafka.Message{
+		"invalid_json":      {Key: []byte("u"), Value: []byte("{not json")},
+		"validation_failed": kmsg(t, bad),
+	}
+	for want, m := range cases {
+		before := len(pub.dlq)
+		if err := p.Process(context.Background(), m); err != nil {
+			t.Fatal(err)
+		}
+		if len(pub.dlq) != before+1 || pub.dlq[len(pub.dlq)-1] != want {
+			t.Fatalf("want DLQ reason %q, got %v", want, pub.dlq)
+		}
+	}
+	if d, _ := pub.counts(); d != 0 {
+		t.Fatalf("poison messages must never be decided, got %d", d)
+	}
+}
+
+func TestDLQOutageBlocksInsteadOfDropping(t *testing.T) {
+	pub := &FakePublisher{failDLQ: 2}
+	p, _ := NewTestProcessor(t, pub)
+
+	if err := p.Process(context.Background(), kafka.Message{Value: []byte("garbage")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, q := pub.counts(); q != 1 {
+		t.Fatalf("the DLQ write must be retried until it lands, got %d", q)
+	}
+}
