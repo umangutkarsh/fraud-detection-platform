@@ -238,3 +238,18 @@ func TestDLQOutageBlocksInsteadOfDropping(t *testing.T) {
 		t.Fatalf("the DLQ write must be retried until it lands, got %d", q)
 	}
 }
+
+func TestCancelledContextLeavesMessageUncommitted(t *testing.T) {
+	pub := &FakePublisher{failDecisions: 100}
+	p, _ := NewTestProcessor(t, pub)
+	p.Retry = RetryPolicy{MaxAttempts: 50, Base: 50 * time.Millisecond, Max: 50 * time.Millisecond}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if err := p.Process(ctx, kmsg(t, goodTx("t1"))); err == nil {
+		t.Fatal("shutdown mid-retry must return an error so the offset is NOT committed")
+	}
+	if _, q := pub.counts(); q != 0 {
+		t.Fatal("a shutdown must not be mistaken for a poison message")
+	}
+}
