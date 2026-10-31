@@ -3,8 +3,10 @@ package pipeline
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fraud-detection-platform/internal/processor/metrics"
 	"hash/fnv"
+	"io"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -67,5 +69,39 @@ func (p *Pipeline) flushCommits() {
 		metrics.CommitFailures.Inc()
 		p.log.Error("offset commit failed; will retry", "error", err)
 		p.tracker.Restore(msgs)
+	}
+}
+
+func (p *Pipeline) fetchLoop() {
+	defer p.fetchWG.Done()
+	defer func() {
+		for _, ch := range p.shards {
+			close(ch) // lets the workers' range loops end
+		}
+	}()
+
+	failures := 0
+	for {
+		msg, err := p.reader.FetchMessage(p.fetchCtx)
+		if err != nil {
+			if p.fetchCtx.Err() != nil || errors.Is(err, io.EOF) {
+				return
+			}
+			failures++
+			wait := min(time.Duration(failures)*500*time.Millisecond, 5*time.Second)
+			p.log.Error("kafka fetch failed", "error", err, "retry_in", wait)
+			if Sleep(p.fetchCtx, wait) != nil {
+				return
+			}
+			continue
+		}
+		failures = 0
+
+		p.tracker.Track(&msg) // before hand-off, so a worker can never complete an untracked offset
+		select {
+		case p.shards[shardFor(msg, len(p.shards))] <- msg: // blocks when full = backpressure
+		case <-p.fetchCtx.Done():
+			return // not processed, not committed: redelivered after restart
+		}
 	}
 }
