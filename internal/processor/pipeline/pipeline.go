@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"fraud-detection-platform/internal/processor/config"
 	"fraud-detection-platform/internal/processor/rules"
@@ -134,4 +135,65 @@ func New(cfg config.Config, log *slog.Logger) (*Pipeline, error) {
 		workCancel:  workCancel,
 		auxStop:     make(chan struct{}),
 	}, nil
+}
+
+func (p *Pipeline) Start() {
+	p.fetchWG.Add(1)
+	go p.fetchLoop()
+
+	for i, ch := range p.shards {
+		p.workerWG.Add(1)
+		go p.worker(i+1, ch)
+	}
+
+	p.auxWG.Add(2)
+	go p.commitLoop()
+	go p.statsLoop()
+
+	p.ready.Store(true)
+}
+
+// Ready backs the readiness probe: false while shutting down or if Redis,
+// which every decision depends on, is unreachable.
+func (p *Pipeline) Ready(ctx context.Context) error {
+	if !p.ready.Load() {
+		return errors.New("pipeline is not running")
+	}
+	if err := p.rdb.Ping(ctx).Err(); err != nil {
+		return fmt.Errorf("redis: %w", err)
+	}
+	return nil
+}
+
+func (p *Pipeline) Stop(ctx context.Context) error {
+	p.ready.Store(false)
+
+	p.fetchCancel()
+	p.fetchWG.Wait() // fetchLoop closes the shard channels on exit
+
+	drained := make(chan struct{})
+	go func() { p.workerWG.Wait(); close(drained) }()
+	select {
+	case <-drained:
+	case <-ctx.Done():
+		p.log.Warn("drain deadline reached; cancelling in-flight work (uncommitted messages will be redelivered)")
+		p.workCancel()
+		<-drained
+	}
+	p.workCancel()
+
+	close(p.auxStop)
+	p.auxWG.Wait() // commitLoop performs a last flush before returning
+
+	var errs []error
+	if err := p.reader.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("close kafka reader: %w", err))
+	}
+	if err := p.pub.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("close kafka writer: %w", err))
+	}
+	if err := p.rdb.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("close redis: %w", err))
+	}
+	return errors.Join(errs...)
 }
