@@ -30,6 +30,7 @@ func (tracker *OffsetTracker) Track(message *kafka.Message) {
 	partitionOffset := tracker.parts[message.Partition]
 	if partitionOffset == nil {
 		partitionOffset = &PartitionOffsets{done: make(map[int64]kafka.Message), maxTracked: -1}
+		tracker.parts[message.Partition] = partitionOffset
 	}
 
 	if message.Offset <= partitionOffset.maxTracked {
