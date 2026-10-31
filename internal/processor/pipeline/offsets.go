@@ -19,7 +19,7 @@ type OffsetTracker struct {
 	pending int
 }
 
-func NewOffesetTracker() *OffsetTracker {
+func NewOffsetTracker() *OffsetTracker {
 	return &OffsetTracker{parts: make(map[int]*PartitionOffsets)}
 }
 
