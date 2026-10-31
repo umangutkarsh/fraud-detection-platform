@@ -1,8 +1,11 @@
 package pipeline
 
 import (
+	"context"
 	"encoding/binary"
+	"fraud-detection-platform/internal/processor/metrics"
 	"hash/fnv"
+	"time"
 
 	"github.com/segmentio/kafka-go"
 )
@@ -32,5 +35,37 @@ func (p *Pipeline) worker(id int, in <-chan kafka.Message) {
 			continue
 		}
 		p.tracker.Complete(&msg)
+	}
+}
+
+func (p *Pipeline) commitLoop() {
+	defer p.auxWG.Done()
+
+	ticker := time.NewTicker(p.cfg.CommitInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			p.flushCommits()
+		case <-p.auxStop:
+			p.flushCommits() // final flush on shutdown
+			return
+		}
+	}
+}
+
+func (p *Pipeline) flushCommits() {
+	msgs := p.tracker.Drain()
+	if len(msgs) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := p.reader.CommitMessages(ctx, msgs...); err != nil {
+		metrics.CommitFailures.Inc()
+		p.log.Error("offset commit failed; will retry", "error", err)
+		p.tracker.Restore(msgs)
 	}
 }
