@@ -97,3 +97,50 @@ func NewTestProcessor(t *testing.T, pub *FakePublisher) (*Processor, *miniredis.
 		Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}, mr
 }
+
+func TestApprovedTransactionIsPublishedOnce(t *testing.T) {
+	pub := &FakePublisher{}
+	p, _ := NewTestProcessor(t, pub)
+
+	if err := p.Process(context.Background(), kmsg(t, goodTx("t1"))); err != nil {
+		t.Fatal(err)
+	}
+	if d, q := pub.counts(); d != 1 || q != 0 {
+		t.Fatalf("decisions=%d dlq=%d, want 1/0", d, q)
+	}
+	if pub.decisions[0].Decision != contract.DecisionApproved {
+		t.Fatalf("decision = %q", pub.decisions[0].Decision)
+	}
+}
+
+func TestRedeliveryAfterCompletionIsSkipped(t *testing.T) {
+	pub := &FakePublisher{}
+	p, _ := NewTestProcessor(t, pub)
+	m := kmsg(t, goodTx("t1"))
+
+	_ = p.Process(context.Background(), m)
+	_ = p.Process(context.Background(), m) // Kafka redelivery
+	if d, _ := pub.counts(); d != 1 {
+		t.Fatalf("a redelivered transaction must not be decided twice, got %d decisions", d)
+	}
+}
+
+func TestDecisionIsStoredForTheGatewayAfterPublish(t *testing.T) {
+	pub := &FakePublisher{}
+	p, mr := NewTestProcessor(t, pub)
+
+	if err := p.Process(context.Background(), kmsg(t, goodTx("t1"))); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := mr.Get(contract.DecisionKey("merchant-1", "t1"))
+	if err != nil {
+		t.Fatalf("decision must be queryable after processing: %v", err)
+	}
+	var stored contract.FraudResult
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil || stored.Decision != contract.DecisionApproved {
+		t.Fatalf("stored decision = %+v (%v)", stored, err)
+	}
+	if mr.Exists(contract.DecisionKey("merchant-2", "t1")) {
+		t.Fatal("decisions must be scoped per merchant")
+	}
+}
