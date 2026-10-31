@@ -144,3 +144,61 @@ func TestDecisionIsStoredForTheGatewayAfterPublish(t *testing.T) {
 		t.Fatal("decisions must be scoped per merchant")
 	}
 }
+
+// The core bug in the original: the idempotency key was set before the decision
+// was published, so a failure in between lost the transaction forever.
+func TestFailedPublishIsRetriedNotLost(t *testing.T) {
+	pub := &FakePublisher{failDecisions: 2}
+	p, _ := NewTestProcessor(t, pub)
+
+	if err := p.Process(context.Background(), kmsg(t, goodTx("t1"))); err != nil {
+		t.Fatal(err)
+	}
+	if d, q := pub.counts(); d != 1 || q != 0 {
+		t.Fatalf("after two transient failures the decision must still be published once; decisions=%d dlq=%d", d, q)
+	}
+}
+
+func TestRetriesExhaustedGoToDLQ(t *testing.T) {
+	pub := &FakePublisher{failDecisions: 100}
+	p, mr := NewTestProcessor(t, pub)
+
+	if err := p.Process(context.Background(), kmsg(t, goodTx("t1"))); err != nil {
+		t.Fatal(err)
+	}
+	if d, q := pub.counts(); d != 0 || q != 1 || pub.dlq[0] != "retries_exhausted" {
+		t.Fatalf("want 1 retries_exhausted DLQ record, got decisions=%d dlq=%v", d, pub.dlq)
+	}
+	if mr.Exists(contract.IdempotencyKey("merchant-1", "t1")) {
+		t.Fatal("the claim must be released so a later replay can succeed")
+	}
+}
+
+type FlakyStore struct {
+	inner DecisionStore
+	fails int
+}
+
+func (f *FlakyStore) Save(ctx context.Context, r contract.FraudResult) error {
+	if f.fails > 0 {
+		f.fails--
+		return errors.New("redis blip")
+	}
+	return f.inner.Save(ctx, r)
+}
+
+func TestStoreFailureIsRetriedSoGatewayNeverSeesPendingForever(t *testing.T) {
+	pub := &FakePublisher{}
+	p, miniRedis := NewTestProcessor(t, pub)
+	p.Store = &FlakyStore{inner: p.Store, fails: 1}
+
+	if err := p.Process(context.Background(), kmsg(t, goodTx("t1"))); err != nil {
+		t.Fatal(err)
+	}
+	if !miniRedis.Exists(contract.DecisionKey("merchant-1", "t1")) {
+		t.Fatal("decision must be stored after a transient store failure")
+	}
+	if _, q := pub.counts(); q != 0 {
+		t.Fatal("one transient failure must not dead-letter the message")
+	}
+}
