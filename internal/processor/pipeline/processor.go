@@ -70,11 +70,11 @@ func (processor *Processor) Process(ctx context.Context, message kafka.Message) 
 	var txn contract.Transaction
 	if err := json.Unmarshal(message.Value, &txn); err != nil {
 		processor.Log.Error("failed to unmarshal transaction", "error", err, "partition", message.Partition, "offset", message.Offset)
-		return processor.deadLetter(ctx, message, "unmarshal", fmt.Errorf("unmarshal: %w", err))
+		return processor.deadLetter(ctx, message, "invalid_json", fmt.Errorf("invalid_json: %w", err))
 	}
 	if err := txn.Validate(time.Now()); err != nil {
 		processor.Log.Error("invalid transaction", "error", err, "partition", message.Partition, "offset", message.Offset)
-		return processor.deadLetter(ctx, message, "validate", fmt.Errorf("validate: %w", err))
+		return processor.deadLetter(ctx, message, "validation_failed", fmt.Errorf("validation_failed: %w", err))
 	}
 
 	var lastErr error
@@ -82,7 +82,7 @@ func (processor *Processor) Process(ctx context.Context, message kafka.Message) 
 		err := processor.attempt(ctx, txn)
 		if err == nil {
 			metrics.ProcessingLatency.Observe(float64(time.Since(start).Seconds()))
-			if message.Time.IsZero() {
+			if !message.Time.IsZero() {
 				metrics.EndToEndLatency.Observe(float64(time.Since(message.Time).Seconds()))
 			}
 			return nil
@@ -106,7 +106,7 @@ func (processor *Processor) Process(ctx context.Context, message kafka.Message) 
 			}
 		}
 	}
-	return processor.deadLetter(ctx, message, "retries_exhaused", lastErr)
+	return processor.deadLetter(ctx, message, "retries_exhausted", lastErr)
 }
 
 func (processor *Processor) attempt(ctx context.Context, txn contract.Transaction) error {
