@@ -45,6 +45,7 @@ func DefaultConfig() Config {
 		AMLWindow:              2 * time.Minute,
 		CrossBorderMaxTxns:     5,
 		CrossBorderMinGBPMinor: 10_000_00,
+		VelocityBaseScore:      30,
 		QuarantineThreshold:    50,
 		CrossBorderRiskScore:   60,
 	}
@@ -105,6 +106,6 @@ func (e *Engine) Evaluate(ctx context.Context, txn contract.Transaction) (contra
 		IsFraudulent: quarantine,
 		RiskScore:    score,
 		Reasons:      reasons,
-		EvaluatedAt:  e.now().Local(),
+		EvaluatedAt:  e.now().UTC(),
 	}, nil
 }
