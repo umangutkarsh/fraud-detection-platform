@@ -33,6 +33,7 @@ type Config struct {
 	CrossBorderMaxTxns     int
 	CrossBorderMinGBPMinor int64
 	VelocityBaseScore      int
+	HighValueRiskScore     int
 	QuarantineThreshold    int
 	CrossBorderRiskScore   int `json:"cross_border_risk_score" yaml:"cross_border_risk_score"`
 }
@@ -46,6 +47,7 @@ func DefaultConfig() Config {
 		CrossBorderMaxTxns:     5,
 		CrossBorderMinGBPMinor: 10_000_00,
 		VelocityBaseScore:      30,
+		HighValueRiskScore:     40,
 		QuarantineThreshold:    50,
 		CrossBorderRiskScore:   60,
 	}
@@ -64,7 +66,7 @@ func NewEngine(threshold int, rules ...Rule) *Engine {
 // NewDefaultEngine wires the standard rule set onto a Redis client.
 func NewDefaultEngine(rdb redis.Cmdable, fx Converter, cfg Config) *Engine {
 	return NewEngine(cfg.QuarantineThreshold,
-		NewHighValue(fx, cfg.HighValueGBPMinor, cfg.CrossBorderRiskScore),
+		NewHighValue(fx, cfg.HighValueGBPMinor, cfg.HighValueRiskScore),
 		NewVelocity(rdb, cfg.VelocityWindow, cfg.VelocityBaseScore),
 		NewCrossBorder(rdb, fx, cfg),
 	)
