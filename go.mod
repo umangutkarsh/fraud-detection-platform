@@ -7,6 +7,7 @@ require (
 	github.com/prometheus/client_golang v1.25.0
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/segmentio/kafka-go v0.4.51
+	golang.org/x/time v0.16.0
 )
 
 require (
