@@ -188,3 +188,29 @@ func TestEngineScoring(t *testing.T) {
 		t.Fatalf("burst under 500ms must be quarantined with score 60: %+v", res)
 	}
 }
+
+func TestDefaultConfigScoresAreWired(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	e := NewDefaultEngine(rdb, DefaultFX(), DefaultConfig())
+
+	now := time.Now()
+	tx := func(id string, amount int64) contract.Transaction {
+		return contract.Transaction{ID: id, UserID: "u", MerchantID: "m", AmountMinor: amount,
+			Currency: "GBP", Country: "GB", Timestamp: now}
+	}
+
+	// one very large transaction is flagged but not quarantined
+	r, _ := e.Evaluate(context.Background(), tx("big", 20_000_00))
+	if r.RiskScore != 40 || r.IsFraudulent {
+		t.Fatalf("high value alone: score=%d quarantined=%v", r.RiskScore, r.IsFraudulent)
+	}
+
+	// two transactions at the same instant from one user are quarantined
+	_, _ = e.Evaluate(context.Background(), contract.Transaction{ID: "a", UserID: "v", MerchantID: "m", AmountMinor: 2500, Currency: "GBP", Country: "GB", Timestamp: now})
+	r, _ = e.Evaluate(context.Background(), contract.Transaction{ID: "b", UserID: "v", MerchantID: "m", AmountMinor: 2500, Currency: "GBP", Country: "GB", Timestamp: now})
+	if !r.IsFraudulent || r.RiskScore == 0 {
+		t.Fatalf("velocity must contribute to the score: %+v", r)
+	}
+}
