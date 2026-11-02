@@ -6,4 +6,4 @@ coverage.*
 .idea/
 .vscode/
 .env
-*.pem
+*.pembin/
