@@ -7,3 +7,5 @@ coverage.*
 .vscode/
 .env
 *.pembin/
+.venv/
+*.pem
