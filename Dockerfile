@@ -4,7 +4,7 @@
 #   docker build --build-arg APP=processor -t processor:dev .
 
 # Keep in step with the "go" line in go.mod.
-ARG GO_VERSION=1.27.1
+ARG GO_VERSION=1.27.3
 
 FROM golang:${GO_VERSION}-alpine AS build
 ARG APP
