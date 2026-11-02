@@ -18,7 +18,7 @@ type Evaluator interface {
 	Evaluate(ctx context.Context, transaction contract.Transaction) (contract.FraudResult, error)
 }
 
-var errBusy = errors.New("Transaction is already being processed by another worker")
+var errBusy = errors.New("transaction is already being processed by another worker")
 
 type RetryPolicy struct {
 	MaxAttempts int

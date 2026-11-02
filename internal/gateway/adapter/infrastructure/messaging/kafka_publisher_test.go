@@ -22,7 +22,7 @@ func TestSASLMechanismsAreAccepted(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer p.Close()
+			defer func() { _ = p.Close() }()
 			tr := p.w.Transport.(*kafka.Transport)
 			if wantName == "" {
 				if tr.SASL != nil {

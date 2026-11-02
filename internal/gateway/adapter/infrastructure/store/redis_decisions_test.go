@@ -30,7 +30,9 @@ func TestReadsWhatTheProcessorWrites(t *testing.T) {
 		Decision:    contract.DecisionQuarantined, IsFraudulent: true, RiskScore: 90, EvaluatedAt: time.Now().UTC(),
 	}
 	raw, _ := json.Marshal(res)
-	mr.Set(contract.DecisionKey("m-1", "t-1"), string(raw))
+	if err := mr.Set(contract.DecisionKey("m-1", "t-1"), string(raw)); err != nil {
+		t.Fatal(err)
+	}
 
 	got, err := s.GetDecision(ctx, "m-1", "t-1")
 	if err != nil || got == nil || !got.IsFraudulent {
