@@ -47,3 +47,38 @@ services:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 5s
       retries: 10
+
+  processor:
+    build: { context: ., args: { APP: processor } }
+    depends_on:
+      kafka-init: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    environment:
+      KAFKA_BROKERS: kafka:19092
+      REDIS_ADDR: redis:6379
+    ports: ['2112:2112']
+    restart: unless-stopped
+    stop_grace_period: 30s # longer than the processor's 20s drain timeout
+
+  gateway:
+    build: { context: ., args: { APP: gateway } }
+    depends_on:
+      kafka-init: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    environment:
+      HTTP_ADDR: ':8080'
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET to at least 32 random bytes}
+      KAFKA_BROKERS: kafka:19092
+      REDIS_ADDR: redis:6379
+      # Behind a real load balancer, list its CIDR so X-Forwarded-For is trusted:
+      # TRUSTED_PROXIES: 10.0.0.0/8
+      # Restrict callers to known merchant egress ranges:
+      # ALLOWED_CIDRS: 203.0.113.0/24
+    ports: ['8080:8080', '9100:9100']
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    volumes: ['./prometheus.yml:/etc/prometheus/prometheus.yml:ro']
+    ports: ['9090:9090']
