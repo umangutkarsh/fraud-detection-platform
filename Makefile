@@ -25,3 +25,9 @@ down:
 # Follow the application logs
 logs:
 	docker compose logs -f gateway processor
+
+loadtest-up:
+	docker compose -f docker-compose.yml -f docker-compose.loadtest.yml up -d --force-recreate gateway
+
+loadgen:
+	go run ./cmd/loadgen -rate 500 -duration 30s

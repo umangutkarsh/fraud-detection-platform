@@ -1,0 +1,9 @@
+# Overrides for load tests only: effectively disables the gateway's rate limits.
+#   docker compose -f docker-compose.yml -f docker-compose.loadtest.yml up -d --force-recreate gateway
+services:
+  gateway:
+    environment:
+      RATE_LIMIT_IP_RPS: '1000000'
+      RATE_LIMIT_IP_BURST: '1000000'
+      RATE_LIMIT_CLIENT_RPS: '1000000'
+      RATE_LIMIT_CLIENT_BURST: '1000000'
